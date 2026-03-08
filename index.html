@@ -444,6 +444,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const CATS=['Food & Drinks','Home Needs','Basic Needs','Accommodation','Subscription','Other'];
 const CC={'Food & Drinks':'#ff9f43','Home Needs':'#58a6ff','Basic Needs':'#a29bfe','Accommodation':'#00cec9','Subscription':'#fd79a8','Other':'#6c5ce7'};
@@ -451,17 +452,80 @@ const MO=['January','February','March','April','May','June','July','August','Sep
 const MS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 let state=loadState(), cy=new Date().getFullYear(), cm=new Date().getMonth(), txf='All', charts={};
+// Init Supabase and sync on load
+initSupabase();
+window.addEventListener('DOMContentLoaded', function(){ syncFromSupabase(); });
 let mcy=new Date().getFullYear(); // monthly page independent year
 let icy=new Date().getFullYear(), icm=new Date().getMonth(); // income view month
 let icListYear=new Date().getFullYear(); // income checklist year
 let icChecked={}; // checked months: key='Y-M' value=true
 let bcy=new Date().getFullYear(), bcm=new Date().getMonth(); // bills picker year/month
 
+// ── Supabase ──────────────────────────────────────────────
+const SUPA_URL = 'https://kkjmbnwmnfmskrfbmtbx.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtram1ibndtbmZtc2tyZmJtdGJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5NTAwODYsImV4cCI6MjA4ODUyNjA4Nn0.hRybi9MZ80H-SPJA3ZsfwTzqv7NY5RbsoCYUbq5uxWo';
+let db = null;
+function initSupabase(){
+  try{
+    db = supabase.createClient(SUPA_URL, SUPA_KEY);
+    console.log('Supabase connected');
+  }catch(e){ console.warn('Supabase init failed', e); }
+}
+
+async function syncFromSupabase(){
+  if(!db) return;
+  showToast('Syncing...');
+  try{
+    // Load transactions
+    const {data:txData} = await db.from('transactions').select('*').order('date', {ascending:false});
+    if(txData) state.transactions = txData.map(r=>({id:r.id, date:r.date, amount:Number(r.amount), category:r.category, note:r.note||''}));
+
+    // Load kv store
+    const {data:kvData} = await db.from('state_kv').select('*');
+    if(kvData){
+      kvData.forEach(r=>{
+        try{ state[r.key] = JSON.parse(r.value); }catch(e){}
+      });
+    }
+    // Ensure defaults
+    if(!state.budgets) state.budgets = {'Food & Drinks':3000000,'Home Needs':1000000,'Basic Needs':500000,'Accommodation':7000000,'Subscription':1000000,'Other':1000000};
+    if(!state.bills) state.bills = [{name:'Tagihan Rumah',amount:7000000},{name:'Tagihan GPT',amount:335000},{name:'Netflix',amount:200000},{name:'Wife',amount:5000000}];
+    if(!state.incomeByMonth) state.incomeByMonth = {};
+    if(!state.billsByMonth) state.billsByMonth = {};
+
+    localStorage.setItem('duit_v2', JSON.stringify(state));
+    renderActivePage();
+    showToast('Synced ✓');
+  }catch(e){ console.error('Sync error', e); showToast('Sync failed — using local data'); }
+}
+
+async function saveToSupabase(){
+  if(!db) return;
+  try{
+    // Upsert all transactions
+    if(state.transactions.length > 0){
+      await db.from('transactions').upsert(
+        state.transactions.map(t=>({id:String(t.id), date:t.date, amount:t.amount, category:t.category, note:t.note||''})),
+        {onConflict:'id'}
+      );
+    }
+    // Upsert kv rows
+    const kvRows = ['budgets','bills','incomeByMonth','billsByMonth'].map(k=>({'key':k,'value':JSON.stringify(state[k]||{})}));
+    await db.from('state_kv').upsert(kvRows, {onConflict:'key'});
+  }catch(e){ console.error('Save error', e); }
+}
+
+async function deleteFromSupabase(id){
+  if(!db) return;
+  try{ await db.from('transactions').delete().eq('id', String(id)); }catch(e){}
+}
+// ─────────────────────────────────────────────────────────
+
 function loadState(){
   try{const s=localStorage.getItem('duit_v2');if(s)return JSON.parse(s);}catch(e){}
   return{transactions:[],budgets:{'Food & Drinks':3000000,'Home Needs':1000000,'Basic Needs':500000,'Accommodation':7000000,'Subscription':1000000,'Other':1000000},incomeByMonth:{},billsByMonth:{},bills:[{name:'Tagihan Rumah',amount:7000000},{name:'Tagihan GPT',amount:335000},{name:'Netflix',amount:200000},{name:'Wife',amount:5000000}]};
 }
-function save(){localStorage.setItem('duit_v2',JSON.stringify(state));}
+function save(){localStorage.setItem('duit_v2',JSON.stringify(state));saveToSupabase();}
 function fmt(n){const v=n||0;const abs=Math.abs(v);const s=abs.toLocaleString('en-US');return(v<0?'- ':'')+'Rp '+s;}
 function fmtS(n){n=n||0;const sign=n<0?'- ':'';const abs=Math.abs(n);if(abs>=1e9)return sign+'Rp '+(abs/1e9).toFixed(1)+'M';if(abs>=1e6)return sign+'Rp '+(abs/1e6).toFixed(1)+'jt';if(abs>=1e3)return sign+'Rp '+(abs/1e3).toFixed(0)+'rb';return sign+'Rp '+abs;}
 function getMTx(y,m){return state.transactions.filter(t=>{const d=new Date(t.date);return d.getFullYear()===y&&d.getMonth()===m;});}
@@ -548,7 +612,7 @@ function addTransaction(){
   document.getElementById('tx-note').value='';
   showToast('Added ✓');renderDash();
 }
-function delTx(id){state.transactions=state.transactions.filter(t=>t.id!==id);save();renderActivePage();showToast('Deleted');}
+function delTx(id){deleteFromSupabase(id);state.transactions=state.transactions.filter(t=>t.id!==id);save();renderActivePage();showToast('Deleted');}
 
 // DASHBOARD
 function renderDash(){
