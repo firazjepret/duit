@@ -471,29 +471,39 @@ function initSupabase(){
 
 async function syncFromSupabase(){
   if(!db) return;
-  showToast('Syncing...');
   try{
-    // Load transactions
-    const {data:txData} = await db.from('transactions').select('*').order('date', {ascending:false});
-    if(txData) state.transactions = txData.map(r=>({id:r.id, date:r.date, amount:Number(r.amount), category:r.category, note:r.note||''}));
-
-    // Load kv store
+    // Load transactions from Supabase
+    const {data:txData, error:txErr} = await db.from('transactions').select('*').order('date', {ascending:false});
     const {data:kvData} = await db.from('state_kv').select('*');
-    if(kvData){
-      kvData.forEach(r=>{
-        try{ state[r.key] = JSON.parse(r.value); }catch(e){}
-      });
+
+    const cloudHasData = txData && txData.length > 0;
+    const localHasData = state.transactions && state.transactions.length > 0;
+
+    if(cloudHasData){
+      // Cloud has data — use it as source of truth
+      state.transactions = txData.map(r=>({id:r.id, date:r.date, amount:Number(r.amount), category:r.category, note:r.note||''}));
+      if(kvData){
+        kvData.forEach(r=>{ try{ state[r.key]=JSON.parse(r.value); }catch(e){} });
+      }
+      localStorage.setItem('duit_v2', JSON.stringify(state));
+      renderActivePage();
+      showToast('Synced ✓');
+    } else if(localHasData){
+      // Cloud is empty but local has data — push local UP to cloud
+      showToast('Uploading local data to cloud...');
+      await saveToSupabase();
+      showToast('Local data uploaded to cloud ✓');
+    } else {
+      showToast('Ready');
     }
+
     // Ensure defaults
     if(!state.budgets) state.budgets = {'Food & Drinks':3000000,'Home Needs':1000000,'Basic Needs':500000,'Accommodation':7000000,'Subscription':1000000,'Other':1000000};
     if(!state.bills) state.bills = [{name:'Tagihan Rumah',amount:7000000},{name:'Tagihan GPT',amount:335000},{name:'Netflix',amount:200000},{name:'Wife',amount:5000000}];
     if(!state.incomeByMonth) state.incomeByMonth = {};
     if(!state.billsByMonth) state.billsByMonth = {};
 
-    localStorage.setItem('duit_v2', JSON.stringify(state));
-    renderActivePage();
-    showToast('Synced ✓');
-  }catch(e){ console.error('Sync error', e); showToast('Sync failed — using local data'); }
+  }catch(e){ console.error('Sync error', e); showToast('Offline — using local data'); }
 }
 
 async function saveToSupabase(){
@@ -1418,8 +1428,8 @@ function setImportMode(mode, btn){
 }
 
 function confirmImport(){
-  const valid = pendingRows.filter(r=>r.valid).map(r=>({
-    id: Date.now()+Math.random(),
+  const valid = pendingRows.filter(r=>r.valid).map((r,i)=>({
+    id: String(Date.now()+i),
     date: r.parsed.date,
     amount: r.parsed.amount,
     category: r.parsed.category,
@@ -1429,10 +1439,12 @@ function confirmImport(){
   if(importMode==='replace') state.transactions=[];
   state.transactions.push(...valid);
   state.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  save();
+  localStorage.setItem('duit_v2', JSON.stringify(state));
   closeModal();
-  showToast(valid.length+' transactions imported ✓');
+  showToast('Uploading '+valid.length+' rows to cloud...');
   renderPage('settings');
+  // Push everything to Supabase
+  saveToSupabase().then(()=>showToast(valid.length+' transactions synced to cloud ✓'));
 }
 
 // ---- EXPORT ----
