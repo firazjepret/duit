@@ -452,9 +452,6 @@ const MO=['January','February','March','April','May','June','July','August','Sep
 const MS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 let state=loadState(), cy=new Date().getFullYear(), cm=new Date().getMonth(), txf='All', charts={};
-// Init Supabase and sync on load
-initSupabase();
-window.addEventListener('DOMContentLoaded', function(){ syncFromSupabase(); });
 let mcy=new Date().getFullYear(); // monthly page independent year
 let icy=new Date().getFullYear(), icm=new Date().getMonth(); // income view month
 let icListYear=new Date().getFullYear(); // income checklist year
@@ -520,6 +517,10 @@ async function deleteFromSupabase(id){
   try{ await db.from('transactions').delete().eq('id', String(id)); }catch(e){}
 }
 // ─────────────────────────────────────────────────────────
+
+// Init Supabase after all constants are defined
+initSupabase();
+window.addEventListener('DOMContentLoaded', function(){ syncFromSupabase(); });
 
 function loadState(){
   try{const s=localStorage.getItem('duit_v2');if(s)return JSON.parse(s);}catch(e){}
